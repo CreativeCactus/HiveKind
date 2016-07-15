@@ -38,38 +38,82 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
 )
 
+//TODO: tag nodes and visualise templates and nodes inside a ui
+
+var NodePool []Node
 
 func main() {
 	å()
-	//Init, first we need to start a UI node to provide API access
-	RunNodeLocal("gameui")//'node' here refers to a client, not njs
+	//Some of the node actions we expect to be able to perform
+	RunNodeLocal("ui") //'node' here refers to a client, not njs
 	//RunNodeDocker("ui")
-		
-	// Blocking Server
-	masterSock := "/tmp/hivemaster.sock"
+	//RunNodeSsh()
+
+	//Set up a local sock to act as the comms bus
+	masterSock := "/tmp/hivemaster.sock" //TODO: lock and defer delete
 	err := os.Remove(masterSock)
-	if err==nil {
+	if err == nil {
 		fmt.Println("Overwrote existing master sock")
-	}	
-	
+	}
 	session, err := net.Listen("unix", masterSock)
 	if err != nil {
 		log.Fatal("Write: ", err)
 	}
+
+	// Blocking Server, delegate incoming connections to handleComms
 	for {
 		conn, _ := session.Accept()
 		go handleComms(conn)
 	}
 }
 
-var NodePool []Node
+func handleComms(conn net.Conn) {
+	rid := grid()
+	fmt.Printf("New connection: %s\n", rid)
+	chanClient := chanFromConn(conn)
+	for in := range chanClient {
+		fmt.Printf("%s::%s\n", rid, in)
+		if len(in) > 0 && in[0] == []byte("1")[0] {
+			//chanClient<-[]byte("nah\n")
+			conn.Write([]byte("nah\n"))
+		}
+	}
+}
+
+/*
+	Structs
+*/
+
+//method of turning a string of code into a Node
+type meth struct {
+	f func(string) (Node, error)
+}
+
+//Node represents an active child process
+type Node struct {
+	id     string
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Scanner
+	stderr *bufio.Scanner
+}
+
+//template of a node
+type template struct {
+	method string
+	data   string
+}
+
+/*
+	Runner helpers
+*/
 
 func RunNodeLocal(typ string) {
 	template, err := GetNodeTemplate(typ)
@@ -107,9 +151,9 @@ func GetNodeTemplate(typ string) (t template, e error) {
 		ə(err, "InitRead1Err")
 		return
 	}
-	
+
 	INBUILT := map[string]template{
-		"gameui": template{
+		"ui": template{
 			method: "nodepipe",
 			data:   string(clientjs),
 		},
@@ -118,6 +162,7 @@ func GetNodeTemplate(typ string) (t template, e error) {
 	if ok {
 		return
 	}
+
 	//attempt to get the type from some db or a db node
 
 	//finally give up
@@ -125,11 +170,6 @@ func GetNodeTemplate(typ string) (t template, e error) {
 }
 
 //An initialiser for a node
-type template struct {
-	method string
-	data   string
-}
-
 func GetInitMethod(method string) (m meth, e error) {
 	INBUILT := map[string]meth{
 		"nodepipe": meth{
@@ -146,11 +186,11 @@ func GetInitMethod(method string) (m meth, e error) {
 					ə(err, "StartErr")
 					return Node{}, err
 				}
-				if i, err := stdin.Write([]byte(data + "\n")); err!=nil {
+				if i, err := stdin.Write([]byte(data + "\n")); err != nil {
 					ə(err, "InputErr")
 					return Node{}, err
 				} else {
-					print(i," bytes sent to nodepipe "+rid+"\n")
+					print(i, " bytes sent to nodepipe "+rid+"\n")
 					stdin.Close()
 				}
 				return Node{
@@ -158,7 +198,7 @@ func GetInitMethod(method string) (m meth, e error) {
 					cmd:    cmd,
 					stdin:  stdin,
 					stdout: scanout,
-					stderr:scanerr,
+					stderr: scanerr,
 				}, nil
 			},
 		},
@@ -174,70 +214,38 @@ func GetInitMethod(method string) (m meth, e error) {
 	return meth{}, errors.New("Could not find method: " + method)
 }
 
-
-//A method to handle the data of a template.
-type meth struct {
-	f func(string) (Node, error)
-}
-
-type Node struct {
-	id     string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Scanner
-	stderr *bufio.Scanner
-}
-
-func CmdToPipes(cmd *exec.Cmd)(sin io.WriteCloser, sout, serr *bufio.Scanner, e error){
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			ə(err, "PipeInErr")
-			return sin,sout,serr, err
-		}
-		
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			ə(err, "PipeOutErr")
-			return sin,sout,serr, err
-		}
-		scanout := ß(stdout)
-		
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			ə(err, "PipeErrErr")
-			return sin,sout,serr, err
-		}
-		scanerr := ß(stderr)
-		return stdin,scanout,scanerr,nil
-}
-func grid() string {
-	out, err := exec.Command("uuidgen").Output()
+func CmdToPipes(cmd *exec.Cmd) (sin io.WriteCloser, sout, serr *bufio.Scanner, e error) {
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		log.Fatal(err)
+		ə(err, "PipeInErr")
+		return sin, sout, serr, err
 	}
-	return string(out[:len(out)-1])
-}
 
-
-
-
-func handleComms(conn net.Conn) {
-	rid := grid()
-	fmt.Printf("New connection: %s \n",rid)	
-	chanClient:= chanFromConn(conn)
-	for in := range chanClient{
-		fmt.Printf("%s::%s\n",rid,in)
-		if len(in)>0 && in[0]==[]byte("1")[0]{
-			//chanClient<-[]byte("nah\n")
-			conn.Write([]byte("nah\n"))
-		}
-	}
-}
-
-func PipedConn(conn net.Conn,rid,dest_proto,dest_ipport string){
-	target, err := net.DialTimeout(dest_proto, dest_ipport, 500000)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		fmt.Printf("%s:%s\n",rid,err.Error())
+		ə(err, "PipeOutErr")
+		return sin, sout, serr, err
+	}
+	scanout := ß(stdout)
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		ə(err, "PipeErrErr")
+		return sin, sout, serr, err
+	}
+	scanerr := ß(stderr)
+	return stdin, scanout, scanerr, nil
+}
+
+/*
+	Connection helpers
+*/
+
+//PipedConn will pipe a connection to an endpoint
+func PipedConn(conn net.Conn, rid, destProto, destIPPort string) {
+	target, err := net.DialTimeout(destProto, destIPPort, 500000)
+	if err != nil {
+		fmt.Printf("%s:%s\n", rid, err.Error())
 		conn.Write([]byte(fmt.Sprintf("5XX:%s\n", err.Error())))
 		conn.Close()
 		return
@@ -245,9 +253,9 @@ func PipedConn(conn net.Conn,rid,dest_proto,dest_ipport string){
 	Pipe(conn, target, rid)
 }
 
-// Pipe creates a full-duplex pipe between the two sockets and transfers data from one to the other.
+//Pipe creates a full-duplex pipe between the two sockets and transfers data from one to the other.
 func Pipe(conn1 net.Conn, conn2 net.Conn, id string) {
-	dbg:=true
+	dbg := true
 	chan1 := chanFromConn(conn1)
 	chan2 := chanFromConn(conn2)
 	close := func() {
@@ -265,7 +273,6 @@ func Pipe(conn1 net.Conn, conn2 net.Conn, id string) {
 				return
 			}
 			conn2.Write(b1)
-			
 		case b2 := <-chan2:
 			if dbg {
 				fmt.Printf(id+":Server: %s [eof?%v]\n", b2, b2 == nil)
@@ -305,26 +312,17 @@ func chanFromConn(conn net.Conn) chan []byte {
 	return c
 }
 
+/*
+	Tiny helpers
+*/
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+func grid() string {
+	out, err := exec.Command("uuidgen").Output()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return string(out[:len(out)-1])
+}
 
 //compose a+a å
 //debug to print calling line
@@ -347,6 +345,6 @@ func ſ(back int) string {
 
 //compose s+s ß
 //get a scanner for the given stream
-func ß(stream io.ReadCloser) *bufio.Scanner{
+func ß(stream io.ReadCloser) *bufio.Scanner {
 	return bufio.NewScanner(stream)
 }
