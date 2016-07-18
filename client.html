@@ -5,6 +5,7 @@
     <title>Node map</title>
     <script src="jq.js"></script>
     <script src="cytoscape.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         body { 
             font: 14px helvetica neue, helvetica, arial, sans-serif;
@@ -19,6 +20,8 @@
         }
     </style>
     <script>
+        var socket = io();
+        var MY_ID = Date.now()
         $(function(){ // on dom ready
             $('#cy').cytoscape({
                 style: cytoscape.stylesheet()
@@ -55,44 +58,52 @@
                     'opacity': 0.25,
                     'text-opacity': 0
                 }),
-                
-                var socket = io();
-                            
-                socket.on('update', function(msg){
-                                
-                });
-                socket.emit('hello', {});
-                
                 elements: {
                     nodes: [
                     { data: { id: 'a', foo: 3, bar: 5, baz: 2 } },
                     { data: { id: 'b', foo: 6, bar: 1, baz: 3 } },
-                    { data: { id: 'c', foo: 2, bar: 3, baz: 5 } },
-                    { data: { id: 'd', foo: 7, bar: 1, baz: 2 } },
                     { data: { id: 'e', foo: 2, bar: 3, baz: 5 } }
                     ], 
                     edges: [
                     { data: { id: 'ae', weight: 1, source: 'a', target: 'e' } },
-                    { data: { id: 'ab', weight: 3, source: 'a', target: 'b' } },
-                    { data: { id: 'be', weight: 4, source: 'b', target: 'e' } },
-                    { data: { id: 'bc', weight: 5, source: 'b', target: 'c' } },
-                    { data: { id: 'ce', weight: 6, source: 'c', target: 'e' } },
-                    { data: { id: 'cd', weight: 2, source: 'c', target: 'd' } },
-                    { data: { id: 'de', weight: 7, source: 'd', target: 'e' } }
+                    { data: { id: 'ab', weight: 3, source: 'a', target: 'b' } }
                     ]
                 },
-                
                 layout: {
                     name: 'circle',
                     padding: 10
                 },
-                
                 ready: function(){
                     window.cy = this;
                 }
             });
+            
+            //Despite potential for losing sync with server, 
+            //opted for delta events and the inconsistencies will
+            // ba handled as errors
+            socket.on('addNode', function(msg){ addNode(msg); console.log(`added node ${msg.id}`) });
+            socket.on('addEdge', function(msg){ addEdge(msg); console.log(`added edge ${msg.id}`) });
+            socket.on('rmvEdge rmvNode', function(msg){ rmvEdge(msg); console.log(`rmved ${msg   }`) });
+            socket.emit('hello', {id:MY_ID});
 
         }); // on dom ready
+        
+        //Obj is something like 
+        //{ id: "x" , foo:3}
+        function addNode(obj){
+            return cy.add({group:"nodes",data:obj})
+        }
+        //{ id: "xy", source:'x', target:'y' }
+        function addEdge(obj){
+            return cy.add({group:"edges",data:obj})
+        }
+        
+        //Selector is something like 
+        //'node[name = "Jerry"]'
+        //'node#id'
+        function rmv(selector){
+            cy.rmv(selector)
+        }
     </script>
 </head><body>
     <div id="cy"></div>

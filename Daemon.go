@@ -80,7 +80,9 @@ func handleComms(conn net.Conn) {
 	chanClient := chanFromConn(conn)
 	for in := range chanClient {
 		fmt.Printf("%s::%s\n", rid, in)
-		if len(in) > 0 && in[0] == []byte("1")[0] {
+
+		if len(in) > 0 {
+
 			//chanClient<-[]byte("nah\n")
 			conn.Write([]byte("nah\n"))
 		}
@@ -290,10 +292,8 @@ func Pipe(conn1 net.Conn, conn2 net.Conn, id string) {
 //  Read()s from the socket to the channel.
 func chanFromConn(conn net.Conn) chan []byte {
 	c := make(chan []byte)
-
 	go func() {
 		b := make([]byte, 1024)
-
 		for {
 			n, err := conn.Read(b)
 			if n > 0 {

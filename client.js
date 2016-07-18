@@ -4,6 +4,8 @@ var jf = require('jsonfile');
 var mtime = require('microtime.js')
 var PORT = 3003
 var cwd=process.cwd()
+var nodes = {}
+var MY_ID=Date.now()
 
 /*
 
@@ -35,9 +37,9 @@ server.listen(PORT,()=>{ console.log(`http://127.0.0.1:${PORT}/`) });
 
 io.on('connection', function(socket){
     socket.on('hello', function(msg){
-        UID=~~(Math.random()*(1<<16))
+        var UID=msg.id
         console.log(`New client: ${UID}`)
-        io.emit('hello',Initial());
+        for(var n in nodes)       io.emit('addNode',nodes[n]);
     });
 })
 
@@ -51,11 +53,11 @@ var net = require('net');
 var client = net.createConnection("/tmp/hivemaster.sock");
 
 client.on("connect", function() {
-	client.write("Hello!")
+	client.write(`hello|{"id":"${MY_ID}"}`)
 });
 
 client.on("data", function(data) {
-	console.log(data+'')
+	console.log('>>> '+data)
 	process.exit();
 });
 
