@@ -33,6 +33,7 @@
 package main
 
 import (
+	"HiveKind/hk"
 	"bufio"
 	"errors"
 	"fmt"
@@ -49,17 +50,20 @@ import (
 
 //TODO: tag nodes and visualise templates and nodes inside a ui
 
-var ROOT FolderNode
-var Logs = &MsgQue{id: "Logs", messages: []string{"Initialised..."}, viewOpen: false}
+var ROOT hk.FolderNode
+var Logs = &hk.MsgQue{ID: "Logs", Messages: []string{"Initialised..."}, ViewOpen: false}
 
 func main() {
+	//å is a debug helper which will exemplify logging from within
 	å()
 	//Some of the node actions we expect to be able to perform
 	n := RunNodeLocal("ui") //'node' here refers to a client, not njs
 	//RunNodeDocker("ui")
 	//RunNodeSsh()
-	ROOT = FolderNode{
-		nodes: []*Entry{ptr(Logs), ptr(n)},
+
+	//Set up our root node in the tree
+	ROOT = hk.FolderNode{
+		Nodes: []hk.Entry{Logs, n},
 	}
 
 	//Set up a local sock to act as the comms bus
@@ -98,6 +102,10 @@ func handleComms(conn net.Conn) {
 		}
 	}
 }
+
+/*
+	Display stuff
+*/
 
 //Cursor position
 var cx = 0
@@ -163,18 +171,19 @@ func TerminalInterface() {
 
 //List will draw the entire entity tree, then return the visible section
 //todo: redraw every n sec
-func List(e *termbox.Event, entries []*Entry, xoff, yoff int, recursing bool) int {
+func List(e *termbox.Event, entries []hk.Entry, xoff, yoff int, recursing bool) int {
 	for _, v := range entries {
 		if yoff >= vy {
 			yindex := yoff - vy
 			if cy == yindex && e != nil && e.Key == termbox.KeyEnter {
-				(*v).Toggle()
+				(v).Toggle()
 			}
 
 			Disp("⛧ ", xoff, yindex, termbox.ColorDefault, termbox.ColorDefault)
-			(*v).Title(xoff+2, yindex)
+			str, fg, bg := (v).Title()
+			Disp(str, xoff+2, yindex, fg, bg)
 
-			if childs := (*v).Children(); len(childs) > 0 {
+			if childs := (v).Children(); len(childs) > 0 {
 				yoff += List(e, childs, xoff+2, yoff+1, true) - 1
 			}
 		}
@@ -186,7 +195,7 @@ func List(e *termbox.Event, entries []*Entry, xoff, yoff int, recursing bool) in
 	}
 
 	//Make sure our cursor is inside the list
-	cy = lim(0, cy, yoff-1)
+	cy = hk.Lim(0, cy, yoff-1)
 	termbox.SetCursor(cx, cy)
 	return 0
 }
@@ -234,8 +243,8 @@ func CursorControl(e termbox.Event) {
 		ty = e.Height - 1
 	}
 
-	cx = lim(0, cx, tx)
-	cy = lim(0, cy, ty)
+	cx = hk.Lim(0, cx, tx)
+	cy = hk.Lim(0, cy, ty)
 	termbox.SetCursor(cx, cy)
 }
 
@@ -243,36 +252,26 @@ func CursorControl(e termbox.Event) {
 	Runner helpers
 */
 
-func RunNodeLocal(typ string) *Node {
+func RunNodeLocal(typ string) *hk.Node {
 	template, err := GetNodeTemplate(typ)
 	if err != nil {
 		ə(err, "GetTemplate")
 		return nil
 	}
-	method, err := GetInitMethod(template.method)
+	method, err := GetInitMethod(template.Method)
 	if err != nil {
 		ə(err, "GetMethod")
 		return nil
 	}
-	node, err := method.f(template.data)
+	node, err := method.F(template.Data)
 	if err != nil {
 		ə(err, "RunTemplate")
 		return nil
 	}
-	go func() {
-		for node.stdout.Scan() {
-			Logs.messages = append(Logs.messages, fmt.Sprintf("%s.STDOUT: %s\n", node.id, node.stdout.Text()))
-		}
-	}()
-	go func() {
-		for node.stderr.Scan() {
-			Logs.messages = append(Logs.messages, fmt.Sprintf("%s.STDERR: %s\n", node.id, node.stderr.Text()))
-		}
-	}()
 	return &node
 }
 
-func GetNodeTemplate(typ string) (t template, e error) {
+func GetNodeTemplate(typ string) (t hk.Template, e error) {
 	//some inbuilt files need to be loaded. move this to an init function later.
 	//For now we will enjoy auto-reload
 	clientjs, err := ioutil.ReadFile("./client.js")
@@ -281,10 +280,10 @@ func GetNodeTemplate(typ string) (t template, e error) {
 		return
 	}
 
-	INBUILT := map[string]template{
-		"ui": template{
-			method: "nodepipe",
-			data:   string(clientjs),
+	INBUILT := map[string]hk.Template{
+		"ui": hk.Template{
+			Method: "nodepipe",
+			Data:   string(clientjs),
 		},
 	}
 	t, ok := INBUILT[typ]
@@ -295,40 +294,58 @@ func GetNodeTemplate(typ string) (t template, e error) {
 	//attempt to get the type from some db or a db node
 
 	//finally give up
-	return template{}, errors.New("Could not find node type: " + typ)
+	return hk.Template{}, errors.New("Could not find node type: " + typ)
 }
 
 //An initialiser for a node
-func GetInitMethod(method string) (m meth, e error) {
-	INBUILT := map[string]meth{
-		"nodepipe": meth{
-			f: func(data string) (Node, error) {
+func GetInitMethod(method string) (m hk.Meth, e error) {
+	INBUILT := map[string]hk.Meth{
+		"nodepipe": hk.Meth{
+			F: func(data string) (hk.Node, error) {
 				rid := grid()
 				cmd := exec.Command(`node`)
 				stdin, scanout, scanerr, err := CmdToPipes(cmd)
 				if err != nil {
 					ə(err, "PiperErr")
-					return Node{}, err
+					return hk.Node{}, err
 				}
 
 				if err := cmd.Start(); err != nil {
 					ə(err, "StartErr")
-					return Node{}, err
+					return hk.Node{}, err
 				}
 				if i, err := stdin.Write([]byte(data + "\n")); err != nil {
 					ə(err, "InputErr")
-					return Node{}, err
+					return hk.Node{}, err
 				} else {
 					print(i, " bytes sent to nodepipe "+rid+"\n")
 					stdin.Close()
 				}
-				return Node{
-					id:       rid,
-					cmd:      cmd,
-					stdin:    STDIO{stdin},
-					stdout:   scanout,
-					stderr:   scanerr,
-					viewOpen: false,
+
+				myStdio := hk.STDIO{Stdin: stdin}
+				//Read values as they come in and send them to a buffer
+				go func(myStdio *hk.STDIO) {
+					for scanerr.Scan() {
+						myStdio.Stdout = append(myStdio.Stdout, hk.Label{
+							Text: scanerr.Text(),
+							Tag:  "STDERR",
+							Fg:   termbox.ColorRed})
+					}
+				}(&myStdio)
+				go func(myStdio *hk.STDIO) {
+					for scanout.Scan() {
+						myStdio.Stdout = append(myStdio.Stdout, hk.Label{
+							Text: scanout.Text(),
+							Tag:  "STDOUT",
+							Fg:   termbox.ColorGreen})
+					}
+				}(&myStdio)
+
+				return hk.Node{
+					ID:       rid,
+					Cmd:      cmd,
+					Stdio:    &myStdio,
+					ViewOpen: false,
 				}, nil
 			},
 		},
@@ -341,7 +358,7 @@ func GetInitMethod(method string) (m meth, e error) {
 	//attempt to get the method from some db or a db node
 
 	//finally give up
-	return meth{}, errors.New("Could not find method: " + method)
+	return hk.Meth{}, errors.New("Could not find method: " + method)
 }
 
 func CmdToPipes(cmd *exec.Cmd) (sin io.WriteCloser, sout, serr *bufio.Scanner, e error) {
@@ -481,20 +498,4 @@ func ß(stream io.ReadCloser) *bufio.Scanner {
 //print a string to the logs, rather than printf
 func ł(s string) {
 	Logs.Add(s)
-}
-
-func lim(l, v, h int) int {
-	return max(l, min(v, h))
-}
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
