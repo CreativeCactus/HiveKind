@@ -43,18 +43,24 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+
+	"github.com/nsf/termbox-go"
 )
 
 //TODO: tag nodes and visualise templates and nodes inside a ui
 
-var NodePool []Node
+var ROOT FolderNode
+var Logs = &MsgQue{id: "Logs", messages: []string{"Initialised..."}, viewOpen: false}
 
 func main() {
 	å()
 	//Some of the node actions we expect to be able to perform
-	RunNodeLocal("ui") //'node' here refers to a client, not njs
+	n := RunNodeLocal("ui") //'node' here refers to a client, not njs
 	//RunNodeDocker("ui")
 	//RunNodeSsh()
+	ROOT = FolderNode{
+		nodes: []*Entry{ptr(Logs), ptr(n)},
+	}
 
 	//Set up a local sock to act as the comms bus
 	masterSock := "/tmp/hivemaster.sock" //TODO: lock and defer delete
@@ -68,18 +74,22 @@ func main() {
 	}
 
 	// Blocking Server, delegate incoming connections to handleComms
-	for {
-		conn, _ := session.Accept()
-		go handleComms(conn)
-	}
+	go func() {
+		for {
+			conn, _ := session.Accept()
+			go handleComms(conn)
+		}
+	}()
+
+	TerminalInterface()
 }
 
 func handleComms(conn net.Conn) {
 	rid := grid()
-	fmt.Printf("New connection: %s\n", rid)
+	ł(fmt.Sprintf("New connection: %s\n", rid))
 	chanClient := chanFromConn(conn)
 	for in := range chanClient {
-		fmt.Printf("%s::%s\n", rid, in)
+		ł(fmt.Sprintf("%s::%s\n", rid, in))
 
 		if len(in) > 0 {
 
@@ -89,60 +99,177 @@ func handleComms(conn net.Conn) {
 	}
 }
 
-/*
-	Structs
-*/
+//Cursor position
+var cx = 0
+var cy = 0
 
-//method of turning a string of code into a Node
-type meth struct {
-	f func(string) (Node, error)
+//Terminal size
+var tx = 0
+var ty = 0
+
+//Virtual offset
+var vx = 0
+var vy = 0
+
+//TerminalInterface inits termbox and handles input
+func TerminalInterface() {
+	//Sadly termbox cannot be injected.
+	err := termbox.Init()
+	termbox.SetCursor(0, 0)
+	if err != nil {
+		panic(err)
+	}
+	defer termbox.Close()
+
+	//Terminal size
+	tx, ty = termbox.Size()
+
+	//First draw will have an event pointer nil, thus only draw to first level
+	//we can provide an empty event to avoid this effect.
+	var e *termbox.Event
+
+	for {
+		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+		List(e, ROOT.Children(), 1, 0, false)
+		termbox.Flush()
+		ev := termbox.PollEvent()
+		e = &ev
+		CursorControl(*e)
+
+		if e.Ch == '?' { //help
+			termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+			Disp("Example.", 1, 1, termbox.AttrBold+termbox.ColorRed, termbox.ColorDefault)
+		}
+
+		if e.Ch == 'c' {
+			inBuffer := ""
+			for ev.Key != termbox.KeyEnter {
+				ev = termbox.PollEvent()
+				if ev.Ch != ' ' {
+					inBuffer += string(ev.Ch)
+				}
+
+			}
+			Disp(inBuffer, cx, cy, termbox.ColorRed, termbox.ColorCyan)
+		}
+
+		if e.Key == termbox.KeyEsc || e.Key == termbox.KeyCtrlC {
+			termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
+			Disp("Goodbye.", 3, 7, termbox.ColorDefault, termbox.ColorDefault)
+			return
+		}
+	}
 }
 
-//Node represents an active child process
-type Node struct {
-	id     string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Scanner
-	stderr *bufio.Scanner
+//List will draw the entire entity tree, then return the visible section
+//todo: redraw every n sec
+func List(e *termbox.Event, entries []*Entry, xoff, yoff int, recursing bool) int {
+	for _, v := range entries {
+		if yoff >= vy {
+			yindex := yoff - vy
+			if cy == yindex && e != nil && e.Key == termbox.KeyEnter {
+				(*v).Toggle()
+			}
+
+			Disp("⛧ ", xoff, yindex, termbox.ColorDefault, termbox.ColorDefault)
+			(*v).Title(xoff+2, yindex)
+
+			if childs := (*v).Children(); len(childs) > 0 {
+				yoff += List(e, childs, xoff+2, yoff+1, true) - 1
+			}
+		}
+		yoff++
+	}
+
+	if recursing {
+		return yoff
+	}
+
+	//Make sure our cursor is inside the list
+	cy = lim(0, cy, yoff-1)
+	termbox.SetCursor(cx, cy)
+	return 0
 }
 
-//template of a node
-type template struct {
-	method string
-	data   string
+//Disp will print a string to the screen
+func Disp(msg string, x, y int, fg, bg termbox.Attribute) {
+	xo := 0
+	for _, v := range msg {
+		if v == '\n' {
+			xo = 0
+		} else {
+			termbox.SetCell(x+xo, y, v, fg, bg)
+			if (x + xo) < tx {
+				xo++
+			} else {
+				termbox.SetCell(tx, y, '…', fg, bg)
+				continue
+			}
+
+		}
+	}
+}
+
+//CursorControl handles navigation
+func CursorControl(e termbox.Event) {
+	switch e.Key {
+	case termbox.KeyArrowUp:
+		cy--
+		break
+	case termbox.KeyArrowDown:
+		cy++
+		break
+		// case termbox.KeyArrowLeft:
+		// 	cx--
+		// 	break
+		// case termbox.KeyArrowRight:
+		// 	cx++
+		// 	break
+	}
+
+	if e.Width != 0 {
+		tx = e.Height - 1
+	}
+	if e.Height != 0 {
+		ty = e.Height - 1
+	}
+
+	cx = lim(0, cx, tx)
+	cy = lim(0, cy, ty)
+	termbox.SetCursor(cx, cy)
 }
 
 /*
 	Runner helpers
 */
 
-func RunNodeLocal(typ string) {
+func RunNodeLocal(typ string) *Node {
 	template, err := GetNodeTemplate(typ)
 	if err != nil {
 		ə(err, "GetTemplate")
-		return
+		return nil
 	}
 	method, err := GetInitMethod(template.method)
 	if err != nil {
 		ə(err, "GetMethod")
-		return
+		return nil
 	}
 	node, err := method.f(template.data)
 	if err != nil {
 		ə(err, "RunTemplate")
-		return
+		return nil
 	}
 	go func() {
 		for node.stdout.Scan() {
-			fmt.Printf("%s.STDOUT: %s\n", node.id, node.stdout.Text())
+			Logs.messages = append(Logs.messages, fmt.Sprintf("%s.STDOUT: %s\n", node.id, node.stdout.Text()))
 		}
 	}()
 	go func() {
 		for node.stderr.Scan() {
-			fmt.Printf("%s.STDERR: %s\n", node.id, node.stderr.Text())
+			Logs.messages = append(Logs.messages, fmt.Sprintf("%s.STDERR: %s\n", node.id, node.stderr.Text()))
 		}
 	}()
+	return &node
 }
 
 func GetNodeTemplate(typ string) (t template, e error) {
@@ -196,11 +323,12 @@ func GetInitMethod(method string) (m meth, e error) {
 					stdin.Close()
 				}
 				return Node{
-					id:     rid,
-					cmd:    cmd,
-					stdin:  stdin,
-					stdout: scanout,
-					stderr: scanerr,
+					id:       rid,
+					cmd:      cmd,
+					stdin:    STDIO{stdin},
+					stdout:   scanout,
+					stderr:   scanerr,
+					viewOpen: false,
 				}, nil
 			},
 		},
@@ -327,13 +455,13 @@ func grid() string {
 //compose a+a å
 //debug to print calling line
 func å() {
-	fmt.Printf("@:%s\n", ſ(1))
+	ł(fmt.Sprintf("@:%s\n", ſ(1)))
 }
 
 //compose e+e ə
 //throw a standard error
 func ə(e error, lbl string) {
-	fmt.Printf("%s[%s]:%s\n", ſ(1), lbl, e.Error())
+	ł(fmt.Sprintf("%s[%s]:%s\n", ſ(1), lbl, e.Error()))
 }
 
 //compose f+s ſ
@@ -347,4 +475,26 @@ func ſ(back int) string {
 //get a scanner for the given stream
 func ß(stream io.ReadCloser) *bufio.Scanner {
 	return bufio.NewScanner(stream)
+}
+
+//compose /+l ł
+//print a string to the logs, rather than printf
+func ł(s string) {
+	Logs.Add(s)
+}
+
+func lim(l, v, h int) int {
+	return max(l, min(v, h))
+}
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
