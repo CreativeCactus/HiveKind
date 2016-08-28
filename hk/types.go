@@ -10,9 +10,29 @@ import (
 /*
 	Structs
 */
+
+type Action struct {
+	Name    string
+	Fn      func()
+	History []string
+}
+
+func (a *Action) Toggle() {
+	a.Fn()
+}
+func (a *Action) Title() (string, termbox.Attribute, termbox.Attribute) {
+	return "F:" + a.Name, termbox.AttrBold + termbox.ColorCyan, termbox.ColorDefault
+}
+func (a *Action) Children() (wrapped []Entry) {
+	for _, v := range a.History {
+		wrapped = append(wrapped, &Label{})
+	}
+	return
+}
+
 type STDIO struct {
 	ID       string
-	Stdin    io.WriteCloser
+	Stdin    *io.WriteCloser
 	Stdout   []Label
 	ViewOpen bool
 }
@@ -21,7 +41,7 @@ func (s *STDIO) Toggle() {
 	s.ViewOpen = !s.ViewOpen
 }
 func (s *STDIO) Title() (string, termbox.Attribute, termbox.Attribute) {
-	return "STDIO stream", termbox.AttrBold, termbox.ColorDefault
+	return "STDIO", termbox.AttrBold, termbox.ColorDefault
 }
 func (s *STDIO) Children() (wrapped []Entry) {
 	if !s.ViewOpen {
@@ -30,6 +50,15 @@ func (s *STDIO) Children() (wrapped []Entry) {
 	for _, v := range s.Stdout {
 		wrapped = append(wrapped, &v)
 	}
+
+	wrapped = append(wrapped, &Action{
+		Name: "Send...",
+		Fn: func() {
+
+			//for reading
+			print("Hi")
+		},
+	})
 	return
 }
 
@@ -124,11 +153,6 @@ func (n *Node) Children() []Entry {
 	return []Entry{
 		n.Stdio,
 	}
-}
-
-//Convert any entry to *entry, for utility, not pointing
-func Ptr(e Entry) *Entry {
-	return &e
 }
 
 //Entry represents a 'file' (node, function, data), or folder

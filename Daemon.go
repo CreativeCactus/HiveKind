@@ -314,12 +314,12 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 					ə(err, "StartErr")
 					return hk.Node{}, err
 				}
-				if i, err := stdin.Write([]byte(data + "\n")); err != nil {
+				if i, err := (*stdin).Write([]byte(data + "\n")); err != nil {
 					ə(err, "InputErr")
 					return hk.Node{}, err
 				} else {
 					print(i, " bytes sent to nodepipe "+rid+"\n")
-					stdin.Close()
+					(*stdin).Close()
 				}
 
 				myStdio := hk.STDIO{Stdin: stdin}
@@ -361,7 +361,7 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 	return hk.Meth{}, errors.New("Could not find method: " + method)
 }
 
-func CmdToPipes(cmd *exec.Cmd) (sin io.WriteCloser, sout, serr *bufio.Scanner, e error) {
+func CmdToPipes(cmd *exec.Cmd) (sin *io.WriteCloser, sout, serr *bufio.Scanner, e error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		ə(err, "PipeInErr")
@@ -381,7 +381,8 @@ func CmdToPipes(cmd *exec.Cmd) (sin io.WriteCloser, sout, serr *bufio.Scanner, e
 		return sin, sout, serr, err
 	}
 	scanerr := ß(stderr)
-	return stdin, scanout, scanerr, nil
+
+	return &stdin, scanout, scanerr, nil
 }
 
 /*
