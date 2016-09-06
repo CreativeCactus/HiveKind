@@ -1,6 +1,7 @@
 package hk
 
 import (
+	"bufio"
 	"io"
 	"os/exec"
 
@@ -10,22 +11,24 @@ import (
 /*
 	Structs
 */
-
+type ExtensionInterface struct {
+	Stdin *bufio.Reader
+}
 type Action struct {
 	Name    string
-	Fn      func()
+	Fn      func(*ExtensionInterface)
 	History []string
 }
 
-func (a *Action) Toggle() {
-	a.Fn()
+func (a *Action) Toggle(ei *ExtensionInterface) {
+	a.Fn(ei)
 }
 func (a *Action) Title() (string, termbox.Attribute, termbox.Attribute) {
 	return "F:" + a.Name, termbox.AttrBold + termbox.ColorCyan, termbox.ColorDefault
 }
 func (a *Action) Children() (wrapped []Entry) {
 	for _, v := range a.History {
-		wrapped = append(wrapped, &Label{})
+		wrapped = append(wrapped, &Label{Text: v})
 	}
 	return
 }
@@ -33,11 +36,11 @@ func (a *Action) Children() (wrapped []Entry) {
 type STDIO struct {
 	ID       string
 	Stdin    *io.WriteCloser
-	Stdout   []Label
+	Stdout   []*Label
 	ViewOpen bool
 }
 
-func (s *STDIO) Toggle() {
+func (s *STDIO) Toggle(ei *ExtensionInterface) {
 	s.ViewOpen = !s.ViewOpen
 }
 func (s *STDIO) Title() (string, termbox.Attribute, termbox.Attribute) {
@@ -48,15 +51,14 @@ func (s *STDIO) Children() (wrapped []Entry) {
 		return []Entry{}
 	}
 	for _, v := range s.Stdout {
-		wrapped = append(wrapped, &v)
+		wrapped = append(wrapped, v)
 	}
 
 	wrapped = append(wrapped, &Action{
 		Name: "Send...",
-		Fn: func() {
-
-			//for reading
-			print("Hi")
+		Fn: func(ei *ExtensionInterface) {
+			input, _ := ei.Stdin.ReadBytes('\r')
+			(*s.Stdin).Write(input)
 		},
 	})
 	return
@@ -77,7 +79,7 @@ type Label struct {
 func (l *Label) Title() (string, termbox.Attribute, termbox.Attribute) {
 	return "☞" + l.Text, l.Fg, termbox.ColorDefault
 }
-func (l *Label) Toggle() {}
+func (l *Label) Toggle(ei *ExtensionInterface) {}
 func (l *Label) Children() []Entry {
 	return []Entry{}
 }
@@ -95,7 +97,7 @@ func (q *MsgQue) Title() (string, termbox.Attribute, termbox.Attribute) {
 	icon := `O➀➁➂➃➄➅➆➇➈➉⊕`[unread : unread+1]
 	return "[" + icon + "]" + q.ID + "[msgs]", termbox.ColorDefault, termbox.ColorDefault
 }
-func (q *MsgQue) Toggle() {
+func (q *MsgQue) Toggle(ei *ExtensionInterface) {
 	q.ViewOpen = !q.ViewOpen
 	q.Unread = 0
 }
@@ -127,7 +129,7 @@ type FolderNode struct {
 func (f *FolderNode) Title() (string, termbox.Attribute, termbox.Attribute) {
 	return f.ID + "[fold]", termbox.ColorDefault, termbox.ColorDefault
 }
-func (f *FolderNode) Toggle() {}
+func (f *FolderNode) Toggle(ei *ExtensionInterface) {}
 func (f *FolderNode) Children() []Entry {
 	return f.Nodes
 }
@@ -143,7 +145,7 @@ type Node struct {
 func (n *Node) Title() (string, termbox.Attribute, termbox.Attribute) {
 	return n.ID + "[node]", termbox.ColorDefault, termbox.ColorDefault
 }
-func (n *Node) Toggle() {
+func (n *Node) Toggle(ei *ExtensionInterface) {
 	n.ViewOpen = !n.ViewOpen
 }
 func (n *Node) Children() []Entry {
@@ -158,7 +160,7 @@ func (n *Node) Children() []Entry {
 //Entry represents a 'file' (node, function, data), or folder
 type Entry interface {
 	Title() (string, termbox.Attribute, termbox.Attribute)
-	Toggle()
+	Toggle(ei *ExtensionInterface)
 	Children() []Entry
 }
 

@@ -52,23 +52,37 @@ import (
 
 var ROOT hk.FolderNode
 var Logs = &hk.MsgQue{ID: "Logs", Messages: []string{"Initialised..."}, ViewOpen: false}
+var Extensions hk.ExtensionInterface
 
 func main() {
 	//å is a debug helper which will exemplify logging from within
 	å()
+
+	Extensions = hk.ExtensionInterface{Stdin: bufio.NewReader(os.Stdin)}
+
 	//Some of the node actions we expect to be able to perform
-	n := RunNodeLocal("ui") //'node' here refers to a client, not njs
+
+	template, err := GetNodeTemplate("ui")
+	if err != nil {
+		ə(err, "GetTemplate")
+		return
+	}
+
+	n := RunNodeLocal(&template) //'node' here refers to a client, not njs
+	n2 := RunNodeLocal(&hk.Template{Method: "nodepipe", Data: `
+		setInterval(()=>{console.log(Date.now())},10000);//log every 10 sec
+		`})
 	//RunNodeDocker("ui")
 	//RunNodeSsh()
 
 	//Set up our root node in the tree
 	ROOT = hk.FolderNode{
-		Nodes: []hk.Entry{Logs, n},
+		Nodes: []hk.Entry{Logs, n, n2},
 	}
 
 	//Set up a local sock to act as the comms bus
 	masterSock := "/tmp/hivemaster.sock" //TODO: lock and defer delete
-	err := os.Remove(masterSock)
+	err = os.Remove(masterSock)
 	if err == nil {
 		fmt.Println("Overwrote existing master sock")
 	}
@@ -138,7 +152,7 @@ func TerminalInterface() {
 
 	for {
 		termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
-		List(e, ROOT.Children(), 1, 0, false)
+		List(e, ROOT.Children(), 1, 0, 0)
 		termbox.Flush()
 		ev := termbox.PollEvent()
 		e = &ev
@@ -171,12 +185,12 @@ func TerminalInterface() {
 
 //List will draw the entire entity tree, then return the visible section
 //todo: redraw every n sec
-func List(e *termbox.Event, entries []hk.Entry, xoff, yoff int, recursing bool) int {
+func List(e *termbox.Event, entries []hk.Entry, xoff, yoff int, recurseDepth int) int {
 	for _, v := range entries {
 		if yoff >= vy {
 			yindex := yoff - vy
 			if cy == yindex && e != nil && e.Key == termbox.KeyEnter {
-				(v).Toggle()
+				(v).Toggle(&Extensions)
 			}
 
 			Disp("⛧ ", xoff, yindex, termbox.ColorDefault, termbox.ColorDefault)
@@ -184,14 +198,14 @@ func List(e *termbox.Event, entries []hk.Entry, xoff, yoff int, recursing bool) 
 			Disp(str, xoff+2, yindex, fg, bg)
 
 			if childs := (v).Children(); len(childs) > 0 {
-				yoff += List(e, childs, xoff+2, yoff+1, true) - 1
+				yoff = List(e, childs, xoff+2, yoff+1, recurseDepth+1)
 			}
 		}
 		yoff++
 	}
 
-	if recursing {
-		return yoff
+	if recurseDepth != 0 {
+		return yoff - 1
 	}
 
 	//Make sure our cursor is inside the list
@@ -252,12 +266,7 @@ func CursorControl(e termbox.Event) {
 	Runner helpers
 */
 
-func RunNodeLocal(typ string) *hk.Node {
-	template, err := GetNodeTemplate(typ)
-	if err != nil {
-		ə(err, "GetTemplate")
-		return nil
-	}
+func RunNodeLocal(template *hk.Template) *hk.Node {
 	method, err := GetInitMethod(template.Method)
 	if err != nil {
 		ə(err, "GetMethod")
@@ -326,18 +335,21 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 				//Read values as they come in and send them to a buffer
 				go func(myStdio *hk.STDIO) {
 					for scanerr.Scan() {
-						myStdio.Stdout = append(myStdio.Stdout, hk.Label{
+						newLabel := hk.Label{
 							Text: scanerr.Text(),
 							Tag:  "STDERR",
-							Fg:   termbox.ColorRed})
+							Fg:   termbox.ColorRed}
+						myStdio.Stdout = append(myStdio.Stdout, &newLabel)
 					}
 				}(&myStdio)
 				go func(myStdio *hk.STDIO) {
 					for scanout.Scan() {
-						myStdio.Stdout = append(myStdio.Stdout, hk.Label{
-							Text: scanout.Text(),
+						newLabel := hk.Label{
+							Text: "IO::: " + scanout.Text(),
 							Tag:  "STDOUT",
-							Fg:   termbox.ColorGreen})
+							Fg:   termbox.ColorGreen,
+						}
+						myStdio.Stdout = append(myStdio.Stdout, &newLabel)
 					}
 				}(&myStdio)
 
