@@ -57,8 +57,17 @@ func (s *STDIO) Children() (wrapped []Entry) {
 	wrapped = append(wrapped, &Action{
 		Name: "Send...",
 		Fn: func(ei *ExtensionInterface) {
-			input, _ := ei.Stdin.ReadBytes('\r')
-			(*s.Stdin).Write(input)
+			buff := []byte{}
+			print("\t\t\t")
+			for input, _ := ei.Stdin.ReadByte(); input != '\r' && input != '\n'; input, _ = ei.Stdin.ReadByte() {
+				buff = append(buff, input)
+				print(string(input))
+			}
+			buff = append(buff, []byte("\r\n")...)
+			buff = append(buff, []byte(`
+`)...)
+			//		(*s.Stdin).Write(buff)
+			io.WriteString(*s.Stdin, "ayyyyyyyyyyyyyy\n")
 		},
 	})
 	return
@@ -66,7 +75,7 @@ func (s *STDIO) Children() (wrapped []Entry) {
 
 //method of turning a string of code into a running Node
 type Meth struct {
-	F func(string) (Node, error)
+	F func(string) (*Node, error)
 }
 
 //Label represents a string in a wrapper of an entry

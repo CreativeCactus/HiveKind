@@ -45,6 +45,8 @@ import (
 	"os/exec"
 	"runtime"
 
+	"strconv"
+
 	"github.com/nsf/termbox-go"
 )
 
@@ -68,16 +70,35 @@ func main() {
 		return
 	}
 
-	n := RunNodeLocal(&template) //'node' here refers to a client, not njs
+	n0 := RunNodeLocal(&template) //'node' here refers to a client, not njs
+	//TODO: label processes with its method, eg if one sends code to a nodepipe'd process, it will be executed
+	n1 := RunNodeLocal(&hk.Template{Method: "nodepipe", Data: `
+		//an example of stderr working
+		var a = require("asdfqwerty")
+		`})
 	n2 := RunNodeLocal(&hk.Template{Method: "nodepipe", Data: `
 		setInterval(()=>{console.log(Date.now())},10000);//log every 10 sec
+		
+		var stdin = process.stdin
+		stdin.setEncoding('utf8');
+		stdin.on('data', function (chunk) {			console.log((chunk+'').toUpperCase());		});
+		
+		// const readline = require('readline');
+		// const rl = readline.createInterface({
+		// input: process.stdin,
+		// output: process.stdout
+		// });
+		// rl.on('line', (input) => {
+		// 	console.log((input).toUpperCase());
+		// });
+
 		`})
 	//RunNodeDocker("ui")
 	//RunNodeSsh()
 
 	//Set up our root node in the tree
 	ROOT = hk.FolderNode{
-		Nodes: []hk.Entry{Logs, n, n2},
+		Nodes: []hk.Entry{Logs, n0, n1, n2},
 	}
 
 	//Set up a local sock to act as the comms bus
@@ -277,7 +298,10 @@ func RunNodeLocal(template *hk.Template) *hk.Node {
 		ə(err, "RunTemplate")
 		return nil
 	}
-	return &node
+
+	stdio := node.Stdio
+	io.WriteString(*stdio.Stdin, "ayyyyyyyyyyyyyy\n")
+	return node
 }
 
 func GetNodeTemplate(typ string) (t hk.Template, e error) {
@@ -308,31 +332,38 @@ func GetNodeTemplate(typ string) (t hk.Template, e error) {
 
 //An initialiser for a node
 func GetInitMethod(method string) (m hk.Meth, e error) {
+	//This represents our inbuilt methods for initialising a node
 	INBUILT := map[string]hk.Meth{
 		"nodepipe": hk.Meth{
-			F: func(data string) (hk.Node, error) {
+			F: func(data string) (*hk.Node, error) {
 				rid := grid()
 				cmd := exec.Command(`node`)
 				stdin, scanout, scanerr, err := CmdToPipes(cmd)
+
 				if err != nil {
 					ə(err, "PiperErr")
-					return hk.Node{}, err
+					return &hk.Node{}, err
 				}
 
 				if err := cmd.Start(); err != nil {
 					ə(err, "StartErr")
-					return hk.Node{}, err
-				}
-				if i, err := (*stdin).Write([]byte(data + "\n")); err != nil {
-					ə(err, "InputErr")
-					return hk.Node{}, err
-				} else {
-					print(i, " bytes sent to nodepipe "+rid+"\n")
-					(*stdin).Close()
+					return &hk.Node{}, err
 				}
 
+				i, err := (*stdin).Write([]byte(data + "\r\n"))
+				if err != nil {
+					ə(err, "InputErr")
+					return &hk.Node{}, err
+				}
+				ł(strconv.Itoa(i) + " bytes sent to nodepipe " + rid + "\n")
+
+				//(*stdin).Close()
+				(*stdin).Write([]byte(`
+				`))
+
 				myStdio := hk.STDIO{Stdin: stdin}
-				//Read values as they come in and send them to a buffer
+
+				//Read STDOUT/ERR as they come in and send them to a display
 				go func(myStdio *hk.STDIO) {
 					for scanerr.Scan() {
 						newLabel := hk.Label{
@@ -345,7 +376,7 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 				go func(myStdio *hk.STDIO) {
 					for scanout.Scan() {
 						newLabel := hk.Label{
-							Text: "IO::: " + scanout.Text(),
+							Text: scanout.Text(),
 							Tag:  "STDOUT",
 							Fg:   termbox.ColorGreen,
 						}
@@ -353,12 +384,13 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 					}
 				}(&myStdio)
 
-				return hk.Node{
+				node := hk.Node{
 					ID:       rid,
 					Cmd:      cmd,
 					Stdio:    &myStdio,
 					ViewOpen: false,
-				}, nil
+				}
+				return &node, nil
 			},
 		},
 	}
@@ -367,10 +399,28 @@ func GetInitMethod(method string) (m hk.Meth, e error) {
 		return
 	}
 
-	//attempt to get the method from some db or a db node
+	//todo: attempt to get the method from some db or a db node
 
-	//finally give up
+	//finally give up if no init method matches
 	return hk.Meth{}, errors.New("Could not find method: " + method)
+}
+
+func GetCmdIO(cmd *exec.Cmd) (stdin io.WriteCloser, err error) {
+	if c.Stdin != nil {
+		return nil, errors.New("exec: Stdin already set")
+	}
+	if c.Process != nil {
+		return nil, errors.New("exec: StdinPipe after process started")
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	c.Stdin = pr
+	cmd.closeAfterStart = append(cmd.closeAfterStart, pr)
+	wc := &exec.closeOnce{File: pw}
+	cmd.closeAfterWait = append(cmd.closeAfterWait, wc)
+	return wc, nil
 }
 
 func CmdToPipes(cmd *exec.Cmd) (sin *io.WriteCloser, sout, serr *bufio.Scanner, e error) {
